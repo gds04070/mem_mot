@@ -215,7 +215,7 @@ class COCOEvaluator:
             cocoEval = COCOeval(cocoGt, cocoDt, annType[1])
             cocoEval.evaluate()
             cocoEval.accumulate()
-            redirect_string = io.StringIO()
+            redirect_string = io.StringIO()tracker
             with contextlib.redirect_stdout(redirect_string):
                 cocoEval.summarize()
             info += redirect_string.getvalue()
