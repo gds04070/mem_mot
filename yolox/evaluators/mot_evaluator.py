@@ -51,7 +51,7 @@ def write_results_no_score(filename, results):
                 f.write(line)
     logger.info('save results to {}'.format(filename))
 
-
+# TODO
 class MOTEvaluator:
     """
     COCO AP Evaluation class.  All the data in the val2017 dataset are processed
