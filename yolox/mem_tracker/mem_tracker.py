@@ -151,7 +151,7 @@ class MEMTracker(object):
         self.max_time_lost = self.buffer_size
         self.kalman_filter = KalmanFilter()
     
-    def update(self, output_results, img, img_info, img_size):
+    def update(self, output_results, img_info, img_size, img_file_name):
         self.frame_id += 1
         activated_stracks = [] # for storing active tracks, for the current frame
         refind_stracks = [] # Lost Tracks whose detections are obtained in the current frame
