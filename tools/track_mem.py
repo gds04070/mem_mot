@@ -47,7 +47,7 @@ def make_parser():
         "--machine_rank", default=0, type=int, help="node rank for multi-node training"
     )
     parser.add_argument(
-        "--f",
+        "-f",
         "--exp_file",
         default=None,
         type=str,
@@ -71,7 +71,7 @@ def make_parser():
         "--trt",
         dest="trt",
         default=False,
-        action="store_ture",
+        action="store_true",
         help="Using TensorRT model for testing.",
     )
     parser.add_argument(
@@ -107,7 +107,7 @@ def make_parser():
     parser.add_argument("--min-box-area", type=float, default=100, help="filter out tiny boxes")
     parser.add_argument("--mot20", dest="mot20", default=False, action="store_true", help="test mot20.")
     # re-id args
-    parser.add_argument("--model_folder", type=str, default="pretained/", help="reid model folder")
+    parser.add_argument("--model_folder", type=str, default="pretrained/googlenet_part8_all_xavier_ckpt_56.h5", help="reid model folder")
     return parser
 
 def compare_dataframes(gts, ts):
@@ -144,11 +144,10 @@ def main(exp, args, num_gpu):
     if rank == 0:
         os.makedirs(file_name, exist_ok=True)
 
-    results_folder = os.path.join(file_name, "track_results")
+    results_folder = os.path.join(file_name, "track_results_memtracker")
     os.makedirs(results_folder, exist_ok=True)
-    model_folder = args.model_folder
 
-    setup_logger(file_name, distributed_rank=rank, filename='val_log.txt', mode="a")
+    setup_logger(file_name, distributed_rank=rank, filename='val_log_mem.txt', mode="a")
     logger.info(f"Args: {args}")
 
     if args.conf is not None:

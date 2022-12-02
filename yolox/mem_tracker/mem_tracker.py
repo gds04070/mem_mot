@@ -16,7 +16,7 @@ from .basetrack import BaseTrack, TrackState
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
-    def __init__(self, tlwh, score, temp_feature, memory_size=30):
+    def __init__(self, tlwh, score, memory_size=30):
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=np.float)
         self.kalman_filter = None
@@ -26,9 +26,8 @@ class STrack(BaseTrack):
         self.score = score
         self.tracklet_len = 0
 
-        self.curr_feature = temp_feature
+        self.curr_feature = None
         self.features = deque([], maxlen=memory_size)
-        self.update_features(self.curr_feature)
     
     def set_feature(self, feature):
         if feature is None:
@@ -38,7 +37,7 @@ class STrack(BaseTrack):
         return True
 
     def update_features(self, feat):
-        feat /= np.linalg.norm(feat)
+        # feat /= np.linalg.norm(feat)
         self.curr_feature = feat
         self.features.append(feat)
 
@@ -47,6 +46,19 @@ class STrack(BaseTrack):
         if self.state != TrackState.Tracked:
             mean_state[7] = 0
         self.mean, self.covariance =self.kalman_filter.predict(mean_state, self.covariance)
+
+    @staticmethod
+    def multi_predict(stracks):
+        if len(stracks) > 0:
+            multi_mean = np.asarray([st.mean.copy() for st in stracks])
+            multi_covariance = np.asarray([st.covariance for st in stracks])
+            for i, st in enumerate(stracks):
+                if st.state != TrackState.Tracked:
+                    multi_mean[i][7] = 0
+            multi_mean, multi_covariance = STrack.shared_kalman.multi_predict(multi_mean, multi_covariance)
+            for i, (mena, cov) in enumerate(zip(multi_mean, multi_covariance)):
+                stracks[i].mean = mean
+                stracks[i].covariance = cov
 
     def activate(self, kalman_filter, frame_id):
         """Start a new tracklet"""
@@ -93,7 +105,7 @@ class STrack(BaseTrack):
 
         self.score = new_track.score
         if update_feature:
-            self.update_features(new_track.curr_feature)
+            self.update_features(new_track.curr_feature) # TODO roi 도 같이 업데이트할지
 
     @property
     # @jit(nopython=True)
@@ -161,12 +173,13 @@ class MEMTracker(object):
         self.buffer_size = int(frame_rate / 30.0 * args.track_buffer)
         self.max_time_lost = self.buffer_size
         self.kalman_filter = KalmanFilter()
-        self.reid_model = load_reid_model()
+        self.reid_model = load_reid_model(args.model_folder)
+
+        self.min_cls_score = args.track_thresh # nms
     
     def update(self, output_results, img_info, img_size, img_file_name):
         img_file_name = os.path.join(get_yolox_datadir(), 'mot', 'train', img_file_name)
         image = cv2.imread(img_file_name)
-
         self.frame_id += 1
         activated_stracks = [] # for storing active tracks, for the current frame
         refind_stracks = [] # Lost Tracks whose detections are obtained in the current frame
@@ -183,55 +196,33 @@ class MEMTracker(object):
         img_h, img_w = img_info[0], img_info[1]
         scale = min(img_size[0] / float(img_h), img_size[1] / float(img_w))
         bboxes /= scale
-        # bbox_xyxy = bboxes
-        # tlwhs = self._xyxy_to_tlwh_array(bbox_xyxy)
-
         remain_inds = scores > self.args.track_thresh
         inds_low = scores > 0.1
         inds_high = scores < self.args.track_thresh
 
         inds_second = np.logical_and(inds_low, inds_high)
-        dets_second = bboxes[inds_second]
         dets_keep = bboxes[remain_inds]
+        dets_second = bboxes[inds_second]
         scores_keep = scores[remain_inds]
         scores_second = scores[inds_second]
 
-        # Detection
+        # Detection (한번 걸러낸 후)
         if len(dets_keep) > 0:
             detections = [STrack(STrack.tlbr_to_tlwh(tlbr), s) for (tlbr, s) in zip(dets_keep, scores_keep)]
         else:
             detections = []
 
         rois = np.asarray([d.tlbr for d in detections], dtype=np.float32) # 현재 프레임에서 detection한 객체들의 roi bboxes
-        # TODO nms
-        if len(detections) > 0:
-            nms_out_index = torchvision.ops.batched_nms(
-                torch.from_numpy(rois),
-                torch.from_numpy(scores.reshape(-1)).to(torch.from_numpy(rois).dtype),
-                torch.zeros_like(torch.from_numpy(scores.reshape(-1))),
-                0.7,
-            )
-            keep = nms_out_index.numpy()
-            mask = np.zeros(len(rois), dtype=np.bool)
-            mask[keep] = True
-            keep = np.where(mask & (scores >= self.min_cls_score))[0]
-            detections = [detections[i] for i in keep]
-            scores = scores[keep]
-            for d, score in zip(detections, scores):
-                d.score = score
-        pred_dets = [d for d in detections if not d.from_det]
-        detections = [d for d in detections if d.from_det]
-        # TODO set features
+
+        # set features (detection 에서만)
         tlbrs = [det.tlbr for det in detections]
         features = extract_reid_features(self.reid_model, image, tlbrs)
         features = features.cpu().numpy()
         for i, det in enumerate(detections):
             det.set_feature(features[i])
-        
-        # 트랙들의 feature update(save)
 
         # track해오던 객체들을 정리
-        unconfirmed = []
+        unconfirmed = [] # is_activated가 되지 않은 기존 트랙들
         tracked_stracks = [] # type: list[STrack]
         for track in self.tracked_stracks:
             if not track.is_activated:
@@ -241,22 +232,21 @@ class MEMTracker(object):
         
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
         STrack.multi_predict(strack_pool) # Predict the current location with KF
-        # TODO iou distance or ! reid distance ! / memory distance(?): feature read 비교 계산(read)
         
         # Step 2: First association, with high score detection boxes
+        # TODO iou distance or ! reid distance ! / memory distance(?): feature read 비교 계산(read) - !!!!!!
         dists = matching.iou_distance(strack_pool, detections)
         if not self.args.mot20:
             dists = matching.fuse_score(dists, detections)
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.args.match_thresh)
-
         for itracked, idet in matches:
             track = strack_pool[itracked]
             det = detections[idet]
             if track.state == TrackState.Tracked:
-                track.update(detections[idet], self.frame_id, ) # TODO (track.update(detections[idet], self.frame_id, roi,))
+                track.update(detections[idet], self.frame_id) # 트랙들의 feature update(save)
                 activated_stracks.append(track)
             else:
-                track.re_activate(det, self.frame_id, new_id=False) # TODO
+                track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
         
         # Step 3: Second association, with low score detection boxes
@@ -273,17 +263,17 @@ class MEMTracker(object):
             track = r_tracked_stracks[itracked]
             det = detections_second[idet]
             if track.state == TrackState.Tracked:
-                track.update(det, self.frame_id) # TODO
+                track.update(det, self.frame_id)
                 activated_stracks.append(track)
             else:
-                track.re_activate(det, self.frame_id, new_id=False) # TODO
+                track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
-        
         for it in u_track:
             track = r_tracked_stracks[it]
             if not track.state == TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
+        
 
         # Deal with unconfirmed tracks, usually tracks with only one beginning frame
         detections = [detections[i] for i in u_detection]
@@ -292,26 +282,28 @@ class MEMTracker(object):
             dists = matching.fuse_score(dists, detections)
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
         for itracked, idet in matches:
-            unconfirmed[itracked].update(detections[idet], self.frame_id) # TODO
+            unconfirmed[itracked].update(detections[idet], self.frame_id)
             activated_stracks.append(unconfirmed[itracked])
         for it in u_unconfirmed:
             track = unconfirmed[it]
             track.mark_removed()
             removed_stracks.append(track)
-        
+        print('check 111111111111111')
         # Step 4: Init new stracks
         for inew in u_detection:
             track = detections[inew]
             if track.score < self.det_thresh:
                 continue
-            track.activate(self.kalman_filter, self.frame_id) # TODO
+            track.activate(self.kalman_filter, self.frame_id)
+            print('check 2222222')
             activated_stracks.append(track)
+        print('check 1111111111')
         # Step 5: Update state
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:
                 track.mark_removed()
                 removed_stracks.append(track)
-
+        
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
         self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)

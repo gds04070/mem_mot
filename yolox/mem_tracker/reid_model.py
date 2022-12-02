@@ -24,7 +24,7 @@ def extract_reid_features(reid_model, image, tlbrs):
     if len(tlbrs) == 0:
         return torch.FloatTensor()
 
-    patches = extract_image_patches(image, tlbrs)
+    patches = extract_image_patches(image, tlbrs)  # bbox 이미지 조각들 
     patches = np.asarray([im_preprocess(cv2.resize(p, reid_model.inp_size)) for p in patches], dtype=np.float32)
 
     with torch.no_grad():

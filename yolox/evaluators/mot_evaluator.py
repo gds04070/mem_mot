@@ -351,7 +351,7 @@ class MOTEvaluator:
         trt_file=None,
         decoder=None,
         test_size=None,
-        result_folder=None
+        result_folder=None,
     ):
         tensor_type = torch.cuda.HalfTensor if half else torch.cuda.FloatTensor
         model = model.eval()

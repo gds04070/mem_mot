@@ -21,7 +21,7 @@ def linear_assignment(cost_matrix, thresh):
     matches = np.asarray(matches)
     return matches, unmatched_a, unmatched_b
 
-def iou(atlbrs, btlbrs):
+def ious(atlbrs, btlbrs):
     """
     Compute cost based on IoU
     :type atlbrs: list[tlbr] | np.ndarray
@@ -32,7 +32,6 @@ def iou(atlbrs, btlbrs):
     ious = np.zeros((len(atlbrs), len(btlbrs)), dtype=np.float)
     if ious.size == 0:
         return ious
-    
     ious = bbox_ious(
         np.ascontiguousarray(atlbrs, dtype=np.float),
         np.ascontiguousarray(btlbrs, dtype=np.float)
