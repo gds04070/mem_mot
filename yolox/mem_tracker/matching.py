@@ -81,3 +81,24 @@ def embedding_distance(tracks, detections, metric='cosine'):
     track_features = np.asarray([track.smooth_feat for track in tracks], dtype=np.float) # !!!!
     cost_matrix = np.maximum(0.0, cdist(track_features, det_features, metric))
     return cost_matrix
+
+def memory_distance(tracks, detections, metric='cosine'):
+    cost_matrix = np.zeros((len(tracks), len(detections)), dtype=np.float)
+    if cost_matrix.size == 0:
+        return cost_matrix
+    det_features = np.asarray([track.curr_feature for track in detections], dtype = np.float)
+    memories = [track.features for track in tracks]
+    costs = []
+    for mem in memories:
+        # TODO
+        costs.append(np.maximum(0.0, cdist(det_features, mem, metric)))
+
+    return cost_matrix
+
+def features_distance(features, metric='cosine'):
+    cost_matrix = np.zeros((len(features), len(features)), dtype = np.float)
+    if cost_matrix.size == 0:
+        return cost_matrix
+    features = np.asarray(features)
+    cost_matrix = np.maximum(0.0, cdist(features, features, metric))
+    return cost_matrix

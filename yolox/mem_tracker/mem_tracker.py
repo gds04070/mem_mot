@@ -27,19 +27,22 @@ class STrack(BaseTrack):
         self.tracklet_len = 0
 
         self.curr_feature = None
-        self.features = deque([], maxlen=memory_size)
+        self.curr_patch = None
+        self.features = deque([], maxlen=memory_size) # [(frame_id, feature, tlbr, patch), ...]
     
-    def set_feature(self, feature):
+    def set_feature(self, feature, patch, frame_id): # detection ->
         if feature is None:
             return False
-        self.features.append(feature)
+        self.features.append((frame_id, feature, self.tlbr, patch))
         self.curr_feature = feature
+        self.curr_patch = patch
         return True
 
-    def update_features(self, feat):
+    def update_features(self, feat, patch, frame_id):
         # feat /= np.linalg.norm(feat)
         self.curr_feature = feat
-        self.features.append(feat)
+        self.curr_patch = patch
+        self.features.append((frame_id, feat, self.tlbr, patch))
 
     def predict(self):
         mean_state = self.mean.copy()
@@ -56,7 +59,7 @@ class STrack(BaseTrack):
                 if st.state != TrackState.Tracked:
                     multi_mean[i][7] = 0
             multi_mean, multi_covariance = STrack.shared_kalman.multi_predict(multi_mean, multi_covariance)
-            for i, (mena, cov) in enumerate(zip(multi_mean, multi_covariance)):
+            for i, (mean, cov) in enumerate(zip(multi_mean, multi_covariance)):
                 stracks[i].mean = mean
                 stracks[i].covariance = cov
 
@@ -64,8 +67,8 @@ class STrack(BaseTrack):
         """Start a new tracklet"""
         self.kalman_filter = kalman_filter
         self.track_id = self.next_id()
+        self.tlwh_to_xyah(self._tlwh)
         self.mean, self.covariance = self.kalman_filter.initiate(self.tlwh_to_xyah(self._tlwh))
-
         self.tracklet_len = 0
         self.state = TrackState.Tracked
         if frame_id == 1:
@@ -77,7 +80,7 @@ class STrack(BaseTrack):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
         )
-        self.update_features(new_track.curr_feature) # TODO
+        self.update_features(new_track.curr_feature, new_track.curr_patch, self.frame_id) # TODO
         self.tracklet_len = 0
         self.state = TrackState.Tracked
         self.is_activated = True
@@ -105,7 +108,7 @@ class STrack(BaseTrack):
 
         self.score = new_track.score
         if update_feature:
-            self.update_features(new_track.curr_feature) # TODO roi 도 같이 업데이트할지
+            self.update_features(new_track.curr_feature, new_track.curr_patch, self.frame_id) # TODO roi 도 같이 업데이트할지
 
     @property
     # @jit(nopython=True)
@@ -130,7 +133,7 @@ class STrack(BaseTrack):
         ret[2:] += ret[:2]
         return ret
 
-    @property
+    @staticmethod
     # @jit(nopython=True)
     def tlwh_to_xyah(tlwh):
         """Convert bounding box to format `(center x, center y, aspect ratio,
@@ -212,14 +215,14 @@ class MEMTracker(object):
         else:
             detections = []
 
-        rois = np.asarray([d.tlbr for d in detections], dtype=np.float32) # 현재 프레임에서 detection한 객체들의 roi bboxes
+        # rois = np.asarray([d.tlbr for d in detections], dtype=np.float32) # 현재 프레임에서 detection한 객체들의 roi bboxes
 
         # set features (detection 에서만)
         tlbrs = [det.tlbr for det in detections]
-        features = extract_reid_features(self.reid_model, image, tlbrs)
+        features, patches = extract_reid_features(self.reid_model, image, tlbrs)
         features = features.cpu().numpy()
         for i, det in enumerate(detections):
-            det.set_feature(features[i])
+            det.set_feature(features[i], patches[i], self.frame_id)
 
         # track해오던 객체들을 정리
         unconfirmed = [] # is_activated가 되지 않은 기존 트랙들
@@ -255,6 +258,13 @@ class MEMTracker(object):
             detections_second = [STrack(STrack.tlbr_to_tlwh(tlbr), s) for (tlbr, s) in zip(dets_second, scores_second)]
         else:
             detections_second = []
+        # set feature - second
+        tlbrs_second = [det.tlbr for det in detections_second]
+        features_second, patches = extract_reid_features(self.reid_model, image, tlbrs_second)
+        features_second = features_second.cpu().numpy()
+        for i, det in enumerate(detections_second):
+            det.set_feature(features_second[i], patches[i], self.frame_id)
+
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
         # iou distance
         dists = matching.iou_distance(r_tracked_stracks, detections_second)
@@ -288,22 +298,18 @@ class MEMTracker(object):
             track = unconfirmed[it]
             track.mark_removed()
             removed_stracks.append(track)
-        print('check 111111111111111')
         # Step 4: Init new stracks
         for inew in u_detection:
             track = detections[inew]
             if track.score < self.det_thresh:
                 continue
             track.activate(self.kalman_filter, self.frame_id)
-            print('check 2222222')
             activated_stracks.append(track)
-        print('check 1111111111')
         # Step 5: Update state
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:
                 track.mark_removed()
                 removed_stracks.append(track)
-        
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
         self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)

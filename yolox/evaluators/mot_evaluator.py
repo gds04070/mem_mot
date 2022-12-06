@@ -18,6 +18,8 @@ from yolox.deepsort_tracker.deepsort import DeepSort
 from yolox.motdt_tracker.motdt_tracker import OnlineTracker
 from yolox.mem_tracker.mem_tracker import MEMTracker
 
+from yolox.mem_tracker import matching
+
 import contextlib
 import io
 import os
@@ -25,7 +27,8 @@ import itertools
 import json
 import tempfile
 import time
-
+from matplotlib import pyplot as plt
+import numpy as np
 
 def write_results(filename, results):
     save_format = '{frame},{id},{x1},{y1},{w},{h},{s},-1,-1,-1\n'
@@ -436,7 +439,6 @@ class MOTEvaluator:
             
             output_results = self.convert_to_coco_format(outputs, info_imgs, ids)
             data_list.extend(output_results)
-
             # run tracking
             if outputs[0] is not None:
                 online_targets = tracker.update(outputs[0], info_imgs, self.img_size, img_file_name[0])
@@ -451,9 +453,15 @@ class MOTEvaluator:
                         online_tlwhs.append(tlwh)
                         online_ids.append(tid)
                         online_scores.append(t.score)
+                    if cur_iter == 20: # (cur_iter % 20 == 0) and (cur_iter != 0):
+                        distance_save_path=os.path.join(result_folder, f'distance_img/{video_names[video_id]}_{cur_iter}_{tid}_({t.start_frame}'
+                                                              f'-{t.end_frame})')
+                        patches_save_path=os.path.join(result_folder, f'patches_img/{video_names[video_id]}_{cur_iter}_{tid}_({t.start_frame}'
+                                                              f'-{t.end_frame})')
+                        self.track_feature_plot(t, distance_save_path, patches_save_path)
+
                 # save results
                 results.append((frame_id, online_tlwhs, online_ids, online_scores))
-
             if is_time_record:
                 track_end = time_synchronized()
                 track_time += track_end - infer_end
@@ -804,3 +812,42 @@ class MOTEvaluator:
             return cocoEval.stats[0], cocoEval.stats[1], info
         else:
             return 0, 0, info
+
+    @staticmethod
+    def track_feature_plot(track, distance_path, patches_path):
+        frame_ids = []
+        features = []
+        tlbrs = []
+        patches = []
+        for i, f, tlbr, patch in track.features:
+            frame_ids.append(i)
+            features.append(f)
+            tlbrs.append(tlbr)
+            patches.append(patch)
+        cost_matrix = matching.features_distance(features)
+        axes = plt.axes()
+        axes.set_ylim(bottom=0)
+        axis_label = list(range(track.start_frame, track.end_frame+1))
+        plt.xticks(axis_label, label=axis_label) # plt.xticks(frame_ids, label = frame_ids)
+        plt.plot(frame_ids, cost_matrix[-1], 'o')
+        plt.title(f'feature distance - id: {track.track_id}_({track.start_frame}-{track.end_frame})')
+        plt.xlabel('frame_id')
+        plt.ylabel('distance')
+        plt.grid(True)
+        plt.savefig(distance_path)
+        plt.clf()
+
+        plt.subplot(5, 5, 1)
+        plt.title('Current target')
+        plt.axis('off')
+        plt.imshow(track.curr_patch)
+
+        for index in range(0, len(patches[:-1])):
+            plt.subplot(5, 5, index+6)
+            plt.title(f'{frame_ids[index]}', fontdict = {'fontsize':8}, x=-0.5, y=0.5)
+            plt.imshow(patches[index])
+            plt.axis('off')
+
+        plt.savefig(patches_path)
+        plt.clf()
+        # plt.close()

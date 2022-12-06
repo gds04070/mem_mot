@@ -14,7 +14,7 @@ def load_reid_model(ckpt):
     model = Model(n_parts=8)
     model.inp_size = (80, 160)
     load_net(ckpt, model)
-    print(f'Load ReID model from {ckpt}')
+    # print(f'Load ReID model from {ckpt}')
 
     model = model.cuda()
     model.eval()
@@ -25,13 +25,13 @@ def extract_reid_features(reid_model, image, tlbrs):
         return torch.FloatTensor()
 
     patches = extract_image_patches(image, tlbrs)  # bbox 이미지 조각들 
-    patches = np.asarray([im_preprocess(cv2.resize(p, reid_model.inp_size)) for p in patches], dtype=np.float32)
+    patches_pp = np.asarray([im_preprocess(cv2.resize(p, reid_model.inp_size)) for p in patches], dtype=np.float32)
 
     with torch.no_grad():
-        im_var = Variable(torch.from_numpy(patches))
+        im_var = Variable(torch.from_numpy(patches_pp))
         im_var = im_var.cuda()
         features = reid_model(im_var).data
-    return features
+    return features, patches
 
 def extract_image_patches(image, bboxes):
     bboxes = np.round(bboxes).astype(np.int)
