@@ -16,7 +16,7 @@ from .basetrack import BaseTrack, TrackState
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
-    def __init__(self, tlwh, score, memory_size=30):
+    def __init__(self, tlwh, score, memory_size=1000):
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=np.float)
         self.kalman_filter = None
@@ -28,21 +28,26 @@ class STrack(BaseTrack):
 
         self.curr_feature = None
         self.curr_patch = None
-        self.features = deque([], maxlen=memory_size) # [(frame_id, feature, tlbr, patch), ...]
+        self.memory = {
+            'frame_id':deque([], maxlen = memory_size),
+            'features':deque([], maxlen = memory_size),
+            'tlbrs':deque([], maxlen = memory_size)}
     
-    def set_feature(self, feature, patch, frame_id): # detection ->
+    def set_feature(self, feature, frame_id): # detection ->
         if feature is None:
             return False
-        self.features.append((frame_id, feature, self.tlbr, patch))
+        self.memory['frame_id'].append(frame_id)
+        self.memory['features'].append(feature)
+        self.memory['tlbrs'].append(self.tlbr)
         self.curr_feature = feature
-        self.curr_patch = patch
         return True
 
-    def update_features(self, feat, patch, frame_id):
+    def update_features(self, feat, frame_id):
         # feat /= np.linalg.norm(feat)
+        self.memory['frame_id'].append(frame_id)
+        self.memory['features'].append(feat)
+        self.memory['tlbrs'].append(self.tlbr)
         self.curr_feature = feat
-        self.curr_patch = patch
-        self.features.append((frame_id, feat, self.tlbr, patch))
 
     def predict(self):
         mean_state = self.mean.copy()
@@ -80,7 +85,7 @@ class STrack(BaseTrack):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
         )
-        self.update_features(new_track.curr_feature, new_track.curr_patch, self.frame_id) # TODO
+        self.update_features(new_track.curr_feature, self.frame_id) # TODO
         self.tracklet_len = 0
         self.state = TrackState.Tracked
         self.is_activated = True
@@ -108,7 +113,7 @@ class STrack(BaseTrack):
 
         self.score = new_track.score
         if update_feature:
-            self.update_features(new_track.curr_feature, new_track.curr_patch, self.frame_id) # TODO roi 도 같이 업데이트할지
+            self.update_features(new_track.curr_feature, self.frame_id) # TODO roi 도 같이 업데이트할지
 
     @property
     # @jit(nopython=True)
@@ -222,7 +227,7 @@ class MEMTracker(object):
         features, patches = extract_reid_features(self.reid_model, image, tlbrs)
         features = features.cpu().numpy()
         for i, det in enumerate(detections):
-            det.set_feature(features[i], patches[i], self.frame_id)
+            det.set_feature(features[i], self.frame_id)
 
         # track해오던 객체들을 정리
         unconfirmed = [] # is_activated가 되지 않은 기존 트랙들
@@ -263,7 +268,7 @@ class MEMTracker(object):
         features_second, patches = extract_reid_features(self.reid_model, image, tlbrs_second)
         features_second = features_second.cpu().numpy()
         for i, det in enumerate(detections_second):
-            det.set_feature(features_second[i], patches[i], self.frame_id)
+            det.set_feature(features_second[i], self.frame_id)
 
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
         # iou distance

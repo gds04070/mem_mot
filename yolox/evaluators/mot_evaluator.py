@@ -382,6 +382,7 @@ class MOTEvaluator:
 
         tracker = MEMTracker(self.args)
         ori_thresh = self.args.track_thresh
+        last_frame_id = 0
         for cur_iter, (imgs, _, info_imgs, ids) in enumerate(
             progress_bar(self.dataloader)
         ):
@@ -410,6 +411,21 @@ class MOTEvaluator:
                     self.args.track_thresh = 0.3
                 else:
                     self.args.track_thresh = ori_thresh
+
+                if video_name == 'MOT17-02-FRCNN':
+                    last_frame_id = 299
+                elif video_name == 'MOT17-04-FRCNN':
+                    last_frame_id = 524
+                elif video_name == 'MOT17-05-FRCNN':
+                    last_frame_id = 418
+                elif video_name == 'MOT17-09-FRCNN':
+                    last_frame_id = 262
+                elif video_name == 'MOT17-10-FRCNN':
+                    last_frame_id = 326
+                elif video_name == 'MOT17-11-FRCNN':
+                    last_frame_id = 449
+                elif video_name == 'MOT17-13-FRCNN':
+                    last_frame_id = 374
 
                 if video_name not in video_names:
                     video_names[video_id] = video_name
@@ -453,12 +469,13 @@ class MOTEvaluator:
                         online_tlwhs.append(tlwh)
                         online_ids.append(tid)
                         online_scores.append(t.score)
-                    if cur_iter == 20: # (cur_iter % 20 == 0) and (cur_iter != 0):
-                        distance_save_path=os.path.join(result_folder, f'distance_img/{video_names[video_id]}_{cur_iter}_{tid}_({t.start_frame}'
-                                                              f'-{t.end_frame})')
-                        patches_save_path=os.path.join(result_folder, f'patches_img/{video_names[video_id]}_{cur_iter}_{tid}_({t.start_frame}'
-                                                              f'-{t.end_frame})')
-                        self.track_feature_plot(t, distance_save_path, patches_save_path)
+                    if (cur_iter % 100 == 0) and (cur_iter != 0):
+                        distance_save_path=os.path.join(result_folder,
+                                                        f'distance_img/{video_names[video_id]}_{cur_iter}_{tid}_({t.start_frame}'
+                                                        f'-{t.end_frame})')
+                        self.track_feature_plot(t, distance_save_path)
+                if frame_id == last_frame_id:
+                    self.memory_feature_plot(online_targets, result_folder, video_names[video_id], last_frame_id)
 
                 # save results
                 results.append((frame_id, online_tlwhs, online_ids, online_scores))
@@ -814,40 +831,53 @@ class MOTEvaluator:
             return 0, 0, info
 
     @staticmethod
-    def track_feature_plot(track, distance_path, patches_path):
-        frame_ids = []
-        features = []
-        tlbrs = []
-        patches = []
-        for i, f, tlbr, patch in track.features:
-            frame_ids.append(i)
-            features.append(f)
-            tlbrs.append(tlbr)
-            patches.append(patch)
-        cost_matrix = matching.features_distance(features)
+    def track_feature_plot(track, distance_path):
+        frame_ids = list(track.memory['frame_id'])
+        features = list(track.memory['features'])
+        # tlbrs = []
+        curr_feature = track.curr_feature
+        cost_matrix = matching.features_distance(curr_feature, features)
         axes = plt.axes()
         axes.set_ylim(bottom=0)
-        axis_label = list(range(track.start_frame, track.end_frame+1))
-        plt.xticks(axis_label, label=axis_label) # plt.xticks(frame_ids, label = frame_ids)
-        plt.plot(frame_ids, cost_matrix[-1], 'o')
+        if (track.end_frame - track.start_frame) > 10:
+            axis_label = list(range(track.start_frame, track.end_frame+1, (track.end_frame - track.start_frame)//10))
+            if track.end_frame not in axis_label:
+                axis_label = axis_label + [track.end_frame]
+        else:
+            axis_label = list(range(track.start_frame, track.end_frame+1))
+        plt.xticks(axis_label) # plt.xticks(frame_ids, label = frame_ids)
+        plt.plot(frame_ids, cost_matrix[-1], '.')
         plt.title(f'feature distance - id: {track.track_id}_({track.start_frame}-{track.end_frame})')
         plt.xlabel('frame_id')
         plt.ylabel('distance')
-        plt.grid(True)
+        # plt.grid(True)
         plt.savefig(distance_path)
         plt.clf()
-
-        plt.subplot(5, 5, 1)
-        plt.title('Current target')
-        plt.axis('off')
-        plt.imshow(track.curr_patch)
-
-        for index in range(0, len(patches[:-1])):
-            plt.subplot(5, 5, index+6)
-            plt.title(f'{frame_ids[index]}', fontdict = {'fontsize':8}, x=-0.5, y=0.5)
-            plt.imshow(patches[index])
-            plt.axis('off')
-
-        plt.savefig(patches_path)
-        plt.clf()
         # plt.close()
+
+    @staticmethod
+    def memory_feature_plot(tracks, path, video_name, last_frame_id):
+        for ti in range(len(tracks)):
+            tid = tracks[ti].track_id
+            t_start_frame = tracks[ti].start_frame
+            t_end_frame = tracks[ti].end_frame
+            curr_target = np.array(tracks[ti].curr_feature).reshape(1, -1)
+            curr_memory = tracks[ti].memory
+            curr_frame_ids = curr_memory['frame_id']
+            curr_features = curr_memory['features']
+            curr_cost_matrix = matching.features_distance(curr_target, curr_features)
+            axes = plt.axes()
+            axes.set_ylim(bottom=0)
+            axis_label = list(range(1, last_frame_id+1, (last_frame_id-1)//10))
+            plt.xticks(axis_label)
+            plt.plot(curr_frame_ids, curr_cost_matrix[-1], 'o-')
+            for ot_t in (tracks[:ti] + tracks[ti+1:]):
+                other_memory = ot_t.memory
+                other_frame_ids = other_memory['frame_id']
+                other_features = other_memory['features']
+                other_cost_matrix = matching.features_distance(curr_target, other_features)
+                plt.plot(other_frame_ids, other_cost_matrix[-1], '.--')
+            save_path = os.path.join(path, f'graph/{video_name}_{tid}_({t_start_frame}-{t_end_frame})')
+            plt.savefig(save_path)
+            plt.clf()
+

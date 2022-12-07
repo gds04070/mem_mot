@@ -95,10 +95,15 @@ def memory_distance(tracks, detections, metric='cosine'):
 
     return cost_matrix
 
-def features_distance(features, metric='cosine'):
-    cost_matrix = np.zeros((len(features), len(features)), dtype = np.float)
+def features_distance(target, features, metric='cosine'):
+    cost_matrix = np.zeros((len(target), len(features)), dtype = np.float)
     if cost_matrix.size == 0:
         return cost_matrix
-    features = np.asarray(features)
-    cost_matrix = np.maximum(0.0, cdist(features, features, metric))
+    if not isinstance(target, np.ndarray):
+        target = np.asarray(target)
+    if not isinstance(features, np.ndarray):
+        features = np.asarray(features)
+    if len(target.shape) == 1:
+        target = target.reshape(1, -1)
+    cost_matrix = np.maximum(0.0, cdist(target, features, metric))
     return cost_matrix
