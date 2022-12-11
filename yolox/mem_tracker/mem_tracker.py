@@ -221,7 +221,6 @@ class MEMTracker(object):
             detections = []
 
         # rois = np.asarray([d.tlbr for d in detections], dtype=np.float32) # 현재 프레임에서 detection한 객체들의 roi bboxes
-
         # set features (detection 에서만)
         tlbrs = [det.tlbr for det in detections]
         features, patches = extract_reid_features(self.reid_model, image, tlbrs)
@@ -237,10 +236,8 @@ class MEMTracker(object):
                 unconfirmed.append(track)
             else:
                 tracked_stracks.append(track)
-        
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
         STrack.multi_predict(strack_pool) # Predict the current location with KF
-        
         # Step 2: First association, with high score detection boxes
         # TODO iou distance or ! reid distance ! / memory distance(?): feature read 비교 계산(read) - !!!!!!
         dists = matching.iou_distance(strack_pool, detections)
@@ -256,7 +253,6 @@ class MEMTracker(object):
             else:
                 track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
-        
         # Step 3: Second association, with low score detection boxes
         #         association the untrack to the low score detections
         if len(dets_second) > 0:
@@ -269,7 +265,6 @@ class MEMTracker(object):
         features_second = features_second.cpu().numpy()
         for i, det in enumerate(detections_second):
             det.set_feature(features_second[i], self.frame_id)
-
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
         # iou distance
         dists = matching.iou_distance(r_tracked_stracks, detections_second)
@@ -288,7 +283,6 @@ class MEMTracker(object):
             if not track.state == TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
-        
 
         # Deal with unconfirmed tracks, usually tracks with only one beginning frame
         detections = [detections[i] for i in u_detection]

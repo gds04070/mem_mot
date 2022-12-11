@@ -29,6 +29,7 @@ import tempfile
 import time
 from matplotlib import pyplot as plt
 import numpy as np
+from collections import defaultdict
 
 def write_results(filename, results):
     save_format = '{frame},{id},{x1},{y1},{w},{h},{s},-1,-1,-1\n'
@@ -383,6 +384,7 @@ class MOTEvaluator:
         tracker = MEMTracker(self.args)
         ori_thresh = self.args.track_thresh
         last_frame_id = 0
+        track_list=defaultdict(list) # for animation
         for cur_iter, (imgs, _, info_imgs, ids) in enumerate(
             progress_bar(self.dataloader)
         ):
@@ -469,13 +471,16 @@ class MOTEvaluator:
                         online_tlwhs.append(tlwh)
                         online_ids.append(tid)
                         online_scores.append(t.score)
-                    if (cur_iter % 100 == 0) and (cur_iter != 0):
-                        distance_save_path=os.path.join(result_folder,
-                                                        f'distance_img/{video_names[video_id]}_{cur_iter}_{tid}_({t.start_frame}'
-                                                        f'-{t.end_frame})')
-                        self.track_feature_plot(t, distance_save_path)
+                    # if (cur_iter % 100 == 0) and (cur_iter != 0):
+                    #     distance_save_path=os.path.join(result_folder,
+                    #                                     f'distance_img/{video_names[video_id]}_{cur_iter}_{tid}_({t.start_frame}'
+                    #                                     f'-{t.end_frame})')
+                    #     self.track_feature_plot(t, distance_save_path)
+                    # track_list[t.track_id].append(t)
                 if frame_id == last_frame_id:
-                    self.memory_feature_plot(online_targets, result_folder, video_names[video_id], last_frame_id)
+                    self.memory_feature_plot_2(online_targets, result_folder, video_names[video_id], last_frame_id)
+                    # track_feature_plot(track_list, video_names[video_id])
+                    # track_list=defaultdict(list)
 
                 # save results
                 results.append((frame_id, online_tlwhs, online_ids, online_scores))
@@ -853,10 +858,14 @@ class MOTEvaluator:
         # plt.grid(True)
         plt.savefig(distance_path)
         plt.clf()
-        # plt.close()
 
     @staticmethod
     def memory_feature_plot(tracks, path, video_name, last_frame_id):
+        colors=plt.cm.jet(np.linspace(0, 1, len(tracks)))
+        if len(tracks) >= 25:
+            ncol=len(tracks)//25
+        else:
+            ncol=1
         for ti in range(len(tracks)):
             tid = tracks[ti].track_id
             t_start_frame = tracks[ti].start_frame
@@ -870,14 +879,124 @@ class MOTEvaluator:
             axes.set_ylim(bottom=0)
             axis_label = list(range(1, last_frame_id+1, (last_frame_id-1)//10))
             plt.xticks(axis_label)
-            plt.plot(curr_frame_ids, curr_cost_matrix[-1], 'o-')
-            for ot_t in (tracks[:ti] + tracks[ti+1:]):
+            for i, ot_t in enumerate(tracks[:ti] + tracks[ti+1:]):
                 other_memory = ot_t.memory
                 other_frame_ids = other_memory['frame_id']
                 other_features = other_memory['features']
                 other_cost_matrix = matching.features_distance(curr_target, other_features)
-                plt.plot(other_frame_ids, other_cost_matrix[-1], '.--')
+                plt.plot(other_frame_ids, other_cost_matrix[-1], '.-', label=f'{ot_t.track_id}', linewidth=0.5, markersize=2, color=colors[i])
+            plt.plot(curr_frame_ids, curr_cost_matrix[-1], '^-', label = f'{tid}', linewidth=1, markersize=4, color=colors[-1])
+            plt.axis('tight')
+            plt.legend(loc=(1.02, 0.0), ncol=ncol, fontsize=8)
             save_path = os.path.join(path, f'graph/{video_name}_{tid}_({t_start_frame}-{t_end_frame})')
             plt.savefig(save_path)
             plt.clf()
 
+    @staticmethod
+    def memory_feature_plot_2(tracks, path, video_name, last_frame_id):
+        def get_cost_matrix_for_target(target_feature, target_cxcy, memory):
+            memory_ids = memory['frame_id']
+            features = memory['features']
+            positions = np.asarray(memory['tlbrs'])[:, :2]
+            feature_cost_matrix = matching.features_distance(target_feature, features)
+            distance_cost_matrix = matching.features_distance(target_cxcy, positions, 'euclidean')
+            return memory_ids, feature_cost_matrix, distance_cost_matrix
+
+        colors=plt.cm.jet(np.linspace(0, 1, len(tracks)))
+        if len(tracks) >= 25:
+            ncol=len(tracks)//25
+        else:
+            ncol=1
+        for ti in range(len(tracks)):
+            axes=plt.axes()
+            axes.set_ylim(bottom = 0)
+            axis_label=list(range(1, last_frame_id + 1, (last_frame_id - 1)//10))
+            plt.xticks(axis_label)
+            ax1=plt.subplot(1, 2, 1)
+            ax2=plt.subplot(1, 2, 2)
+
+            tid = tracks[ti].track_id
+            t_start_frame = tracks[ti].start_frame
+            t_end_frame = tracks[ti].end_frame
+            curr_target = np.array(tracks[ti].curr_feature).reshape(1, -1)
+            curr_position = tracks[ti].tlbr[:2]
+            curr_frame_ids, curr_feature_matrix, curr_distance_matrix = \
+                get_cost_matrix_for_target(curr_target, curr_position, tracks[ti].memory)
+
+            for i, ot_t in enumerate(tracks[:ti] + tracks[ti+1:]):
+                other_frame_ids, other_feature_matrix, other_distance_matrix = \
+                    get_cost_matrix_for_target(curr_target, curr_position, ot_t.memory)
+                ax1.plot(other_frame_ids, other_feature_matrix[-1], '.-', label=f'{ot_t.track_id}',
+                         linewidth=0.5, markersize=2, color=colors[i])
+                ax2.plot(other_frame_ids, other_distance_matrix[-1], '.-', label = f'{ot_t.track_id}',
+                         linewidth=0.5, markersize=2, color=colors[i])
+
+            ax1.plot(curr_frame_ids, curr_feature_matrix[-1], '^-', label = f'{tid}',
+                     linewidth=1, markersize=4, color=colors[-1])
+            ax2.plot(curr_frame_ids, curr_distance_matrix[-1], '^-', label=f'{tid}',
+                     linewidth=1, markersize=4, color=colors[-1])
+
+            ax1.axis('auto')
+            ax2.axis('auto')
+            ax1.set_title('Feature Distance : Cosine')
+            ax2.set_title('Position Distance : Euclidean')
+            plt.legend(loc=(1.02, 0.0), ncol=ncol, fontsize=8)
+            save_path = os.path.join(path, f'graph/{video_name}_{tid}_({t_start_frame}-{t_end_frame})')
+            plt.savefig(save_path)
+            plt.clf()
+
+    @staticmethod
+    def memory_feature_plot_3(tracks, path, video_name, last_frame_id):
+        def get_cost_matrix_for_target(target_feature, target_cxcy, memory):
+            memory_ids = memory['frame_id']
+            features = memory['features']
+            positions = np.asarray(memory['tlbrs'])[:, :2]
+            feature_cost_matrix = matching.features_distance(target_feature, features)
+            distance_cost_matrix = matching.features_distance(target_cxcy, positions, 'euclidean')
+            return memory_ids, feature_cost_matrix, distance_cost_matrix
+
+        colors=plt.cm.jet(np.linspace(0, 1, len(tracks)))
+        if len(tracks) >= 25:
+            ncol=len(tracks)//25
+        else:
+            ncol=1
+        for ti in range(len(tracks)):
+            axes=plt.axes()
+            axes.set_ylim(bottom = 0)
+            axis_label=list(range(1, last_frame_id + 1, (last_frame_id - 1)//10))
+            plt.xticks(axis_label)
+            ax1=plt.subplot(1, 2, 1)
+            ax2=plt.subplot(1, 2, 2)
+
+            tid = tracks[ti].track_id
+            t_start_frame = tracks[ti].start_frame
+            t_end_frame = tracks[ti].end_frame
+            curr_target = np.array(tracks[ti].curr_feature).reshape(1, -1)
+            curr_position = tracks[ti].tlbr[:2]
+            curr_frame_ids, curr_feature_matrix, curr_distance_matrix = \
+                get_cost_matrix_for_target(curr_target, curr_position, tracks[ti].memory)
+
+            for i, ot_t in enumerate(tracks[:ti] + tracks[ti+1:]):
+                other_frame_ids, other_feature_matrix, other_distance_matrix = \
+                    get_cost_matrix_for_target(curr_target, curr_position, ot_t.memory)
+                ax1.plot(other_frame_ids, other_feature_matrix[-1], '.-', label=f'{ot_t.track_id}',
+                         linewidth=0.5, markersize=2, color=colors[i])
+                ax2.plot(other_frame_ids, other_distance_matrix[-1], '.-', label = f'{ot_t.track_id}',
+                         linewidth=0.5, markersize=2, color=colors[i])
+
+            ax1.plot(curr_frame_ids, curr_feature_matrix[-1], '^-', label = f'{tid}',
+                     linewidth=1, markersize=4, color=colors[-1])
+            ax2.plot(curr_frame_ids, curr_distance_matrix[-1], '^-', label=f'{tid}',
+                     linewidth=1, markersize=4, color=colors[-1])
+
+            ax1.axis('auto')
+            ax2.axis('auto')
+            ax1.set_title('Feature Distance : Cosine')
+            ax2.set_title('Position Distance : Euclidean')
+            plt.legend(loc=(1.02, 0.0), ncol=ncol, fontsize=8)
+            save_path = os.path.join(path, f'graph/{video_name}_{tid}_({t_start_frame}-{t_end_frame})')
+            plt.savefig(save_path)
+            plt.clf()
+
+plt.rcParams['figure.autolayout'] = True
+plt.rcParams['figure.figsize'] = [17, 7]
