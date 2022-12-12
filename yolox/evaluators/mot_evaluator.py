@@ -29,7 +29,10 @@ import tempfile
 import time
 from matplotlib import pyplot as plt
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+from glob import glob
+from pathlib import Path
+import motmetrics as mm
 
 def write_results(filename, results):
     save_format = '{frame},{id},{x1},{y1},{w},{h},{s},-1,-1,-1\n'
@@ -384,7 +387,14 @@ class MOTEvaluator:
         tracker = MEMTracker(self.args)
         ori_thresh = self.args.track_thresh
         last_frame_id = 0
+        first_frame_id = 0
         track_list=defaultdict(list) # for animation
+        # if self.args.mot20:
+        #     gtfiles = glob(os.path.join(f'datasets/MOT20/train', '*/gt/gt_val_half.txt'))
+        # else:
+        #     gtfiles = glob(os.path.join(f'datasets/mot/train', '*/gt/gt_val_half.txt'))
+        # gt = OrderedDict([(Path(f).parts[-3], mm.io.loadtxt(f, fmt='mot15-2D', min_confidence=1)) for f in gtfiles])
+
         for cur_iter, (imgs, _, info_imgs, ids) in enumerate(
             progress_bar(self.dataloader)
         ):
@@ -433,6 +443,7 @@ class MOTEvaluator:
                     video_names[video_id] = video_name
                 if frame_id == 1:
                     tracker = MEMTracker(self.args)
+                    first_frame_id = int(img_file_name[0].split('/')[-1])
                     if len(results) != 0:
                         result_filename = os.path.join(result_folder, f'{video_names[video_id - 1]}.txt')
                         write_results(result_filename, results)
@@ -477,9 +488,11 @@ class MOTEvaluator:
                     #                                     f'-{t.end_frame})')
                     #     self.track_feature_plot(t, distance_save_path)
                     # track_list[t.track_id].append(t)
-                if frame_id == last_frame_id:
-                    self.memory_feature_plot_2(online_targets, result_folder, video_names[video_id], last_frame_id)
+                # if frame_id == last_frame_id:
+                #     self.memory_feature_plot_2(online_targets, result_folder, video_names[video_id], last_frame_id)
                     # track_feature_plot(track_list, video_names[video_id])
+                    # self.memory_feature_plot_for_label(online_targets, gt[video_name], result_folder,
+                    #                                    video_names[video_id], last_frame_id)
                     # track_list=defaultdict(list)
 
                 # save results
@@ -946,57 +959,39 @@ class MOTEvaluator:
             plt.clf()
 
     @staticmethod
-    def memory_feature_plot_3(tracks, path, video_name, last_frame_id):
-        def get_cost_matrix_for_target(target_feature, target_cxcy, memory):
-            memory_ids = memory['frame_id']
-            features = memory['features']
-            positions = np.asarray(memory['tlbrs'])[:, :2]
-            feature_cost_matrix = matching.features_distance(target_feature, features)
-            distance_cost_matrix = matching.features_distance(target_cxcy, positions, 'euclidean')
-            return memory_ids, feature_cost_matrix, distance_cost_matrix
+    def memory_feature_plot_for_label(tracks, gt, model_folder, path, video_name, last_frame_id, start_frame_id):
+        gt_dict = defaultdict(lambda : defaultdict(list))
+        def tlwh_to_tlbr(tlwhs):
+            ret = np.asarray(tlwhs).copy()
+            ret[:, 2:] += ret[:, :2]
+            return ret
 
-        colors=plt.cm.jet(np.linspace(0, 1, len(tracks)))
-        if len(tracks) >= 25:
-            ncol=len(tracks)//25
-        else:
-            ncol=1
+        gt = gt.reset_index(['Id', 'FrameId']).sort_values(by=['FrameId'])
+        Ids = gt['Id'].unique()
+        Frames = sorted(list(gt.index.unique()))
+
+        import cv2
+        from yolox.data.dataloading import get_yolox_datadir
+        from yolox.mem_tracker.reid_model import load_reid_model, extract_reid_features
+        reid_model = load_reid_model(model_folder)
+
+        for frame in Frames:
+            img_file_name = f'{video_name}/img1/{start_frame_id+frame-1:06}.jpg'
+            img_file_name = os.path.join(get_yolox_datadir(), 'mot', 'train', img_file_name)
+            image = cv2.imread(img_file_name)
+            curr_gts = gt.loc[gt['FrameId']==frame].sort_index()
+            ids = curr_gts['Id'].values
+            tlbrs = tlwh_to_tlbr(curr_gts.loc[:, ['X', 'Y', 'Width', 'Height']].values)
+            features, _ = extract_reid_features(reid_model, image, tlbrs)
+            features = features.cpu().numpy()
+            for i, _id in enumerate(ids):
+                gt_dict[_id]['frame_ids'].append(frame)
+                gt_dict[_id]['tlbrs'].append(tlbrs[i])
+                gt_dict[_id]['features'].append(features[i])
+
         for ti in range(len(tracks)):
-            axes=plt.axes()
-            axes.set_ylim(bottom = 0)
-            axis_label=list(range(1, last_frame_id + 1, (last_frame_id - 1)//10))
-            plt.xticks(axis_label)
-            ax1=plt.subplot(1, 2, 1)
-            ax2=plt.subplot(1, 2, 2)
-
             tid = tracks[ti].track_id
-            t_start_frame = tracks[ti].start_frame
-            t_end_frame = tracks[ti].end_frame
-            curr_target = np.array(tracks[ti].curr_feature).reshape(1, -1)
-            curr_position = tracks[ti].tlbr[:2]
-            curr_frame_ids, curr_feature_matrix, curr_distance_matrix = \
-                get_cost_matrix_for_target(curr_target, curr_position, tracks[ti].memory)
 
-            for i, ot_t in enumerate(tracks[:ti] + tracks[ti+1:]):
-                other_frame_ids, other_feature_matrix, other_distance_matrix = \
-                    get_cost_matrix_for_target(curr_target, curr_position, ot_t.memory)
-                ax1.plot(other_frame_ids, other_feature_matrix[-1], '.-', label=f'{ot_t.track_id}',
-                         linewidth=0.5, markersize=2, color=colors[i])
-                ax2.plot(other_frame_ids, other_distance_matrix[-1], '.-', label = f'{ot_t.track_id}',
-                         linewidth=0.5, markersize=2, color=colors[i])
-
-            ax1.plot(curr_frame_ids, curr_feature_matrix[-1], '^-', label = f'{tid}',
-                     linewidth=1, markersize=4, color=colors[-1])
-            ax2.plot(curr_frame_ids, curr_distance_matrix[-1], '^-', label=f'{tid}',
-                     linewidth=1, markersize=4, color=colors[-1])
-
-            ax1.axis('auto')
-            ax2.axis('auto')
-            ax1.set_title('Feature Distance : Cosine')
-            ax2.set_title('Position Distance : Euclidean')
-            plt.legend(loc=(1.02, 0.0), ncol=ncol, fontsize=8)
-            save_path = os.path.join(path, f'graph/{video_name}_{tid}_({t_start_frame}-{t_end_frame})')
-            plt.savefig(save_path)
-            plt.clf()
 
 plt.rcParams['figure.autolayout'] = True
 plt.rcParams['figure.figsize'] = [17, 7]

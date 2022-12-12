@@ -17,6 +17,8 @@ import glob
 import motmetrics as mm
 from collections import OrderedDict
 from pathlib import Path
+import pandas as pd
+pd.set_option('display.max_rows', None)
 
 def make_parser():
     parser = argparse.ArgumentParser("YOLOX Eval")
@@ -222,12 +224,10 @@ def main(exp, args, num_gpu):
         gt_type = '_val_half'
     else:
         gt_type = ''
-    print('gt_type', gt_type)
     if args.mot20:
         gtfiles = glob.glob(os.path.join('datasets/MOT20/train', '*/gt/gt{}.txt'.format(gt_type)))
     else:
         gtfiles = glob.glob(os.path.join('datasets/mot/train', '*/gt/gt{}.txt'.format(gt_type)))
-    print('gt_files', gtfiles)
     tsfiles = [f for f in glob.glob(os.path.join(results_folder, '*.txt')) if not os.path.basename(f).startswith('eval')]
 
     logger.info('Found {} groundtruths and {} test files.'.format(len(gtfiles), len(tsfiles)))
@@ -236,8 +236,7 @@ def main(exp, args, num_gpu):
     logger.info('Loading files.')
 
     gt = OrderedDict([(Path(f).parts[-3], mm.io.loadtxt(f, fmt='mot15-2D', min_confidence=1)) for f in gtfiles])
-    ts = OrderedDict([(os.path.splitext(Path(f).parts[-1])[0], mm.io.loadtxt(f, fmt='mot15-2D', min_confidence=-1)) for f in tsfiles])    
-    
+    ts = OrderedDict([(os.path.splitext(Path(f).parts[-1])[0], mm.io.loadtxt(f, fmt='mot15-2D', min_confidence=-1)) for f in tsfiles])
     mh = mm.metrics.create()    
     accs, names = compare_dataframes(gt, ts)
     
