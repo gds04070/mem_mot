@@ -961,13 +961,19 @@ class MOTEvaluator:
     @staticmethod
     def memory_feature_plot_for_label(tracks, gt, model_folder, path, video_name, last_frame_id, start_frame_id):
         gt_dict = defaultdict(lambda : defaultdict(list))
+        pd_dict = defaultdict(lambda : defaultdict(list))
+
         def tlwh_to_tlbr(tlwhs):
             ret = np.asarray(tlwhs).copy()
             ret[:, 2:] += ret[:, :2]
             return ret
 
+        def get_cost_matrix_for_target(target_feature, target_position, compare_dict):
+            feature_cost_matrix = matching.features_distance(target_feature, compare_dict['features'])
+            distance_cost_matrix = matching.features_distance(target_position, np.asarray(compare_dict['tlbrs'])[:, :2], 'euclidean')
+            return feature_cost_matrix, distance_cost_matrix
+
         gt = gt.reset_index(['Id', 'FrameId']).sort_values(by=['FrameId'])
-        Ids = gt['Id'].unique()
         Frames = sorted(list(gt.index.unique()))
 
         import cv2
@@ -989,9 +995,88 @@ class MOTEvaluator:
                 gt_dict[_id]['tlbrs'].append(tlbrs[i])
                 gt_dict[_id]['features'].append(features[i])
 
-        for ti in range(len(tracks)):
-            tid = tracks[ti].track_id
+        for track in tracks:
+            tid = track.track_id
+            pd_dict[tid]['frame_ids'] = track.memory['frame_id']
+            pd_dict[tid]['tlbrs'] = list(track.memory['tlbrs'])
+            pd_dict[tid]['features'] = list(track.memory['features'])
+
+        if len(pd_dict) + len(gt_dict) >= 50:
+            ncol = (len(pd_dict) + len(gt_dict)) // 50
+        else:
+            ncol = 1
+
+        axis_label = list(range(1, last_frame_id+1, (last_frame_id-1)//10))
+
+        def draw_cost_graph(focus_dict, compare_dict, tag):
+            if tag == 'for_gt':
+                label_a = 'gt'
+                label_b = 'pd'
+            else:
+                label_a = 'pd'
+                label_b = 'gt'
+
+            focus_ids = list(focus_dict.keys())
+            compare_ids = list(compare_dict.keys())
+            focus_colors = plt.cm.jet(np.linspace(0, 1, len(focus_dict)))
+            compare_colors = plt.cm.jet(np.linspace(0, 1, len(compare_dict) + 1))
+            for fi in focus_ids:
+                axes = plt.axes()
+                axes.set_ylim(bottom=0)
+                plt.xticks(axis_label)
+                ax1 = plt.subplot(2, 2, 1)
+                ax2 = plt.subplot(2, 2, 2)
+                ax3 = plt.subplot(2, 2, 3)
+                ax4 = plt.subplot(2, 2, 4)
+
+                focus_target = focus_dict[fi]['features'][-1]
+                focus_position = focus_dict[fi]['tlbrs'][-1][:2]
+                focus_feature_matrix, focus_distance_matrix = \
+                get_cost_matrix_for_target(focus_target, focus_position, focus_dict[fi])
+
+                for i in focus_ids.remove(fi):
+                    other_feature_matrix, other_distance_matrix = \
+                    get_cost_matrix_for_target(focus_target, focus_position, focus_dict[i])
+                    ax3.plot(focus_dict[i]['frame_ids'], other_feature_matrix[-1], ',-', label=f'{label_a} {i}',
+                    linewidth=0.5, markersize=2, color=focus_colors[i])
+                    ax4.plot(focus_dict[i]['frame_ids'], other_distance_matrix[-1], ',-', label=f'{label_a} {i}',
+                    linewidth=0.5, markersize=2, color=focus_colors[i])
+
+                for i in compare_ids:
+                    other_feature_matrix, other_distance_matrix = \
+                        get_cost_matrix_for_target(focus_target, focus_position, compare_dict[i])
+                    ax1.plot(compare_dict[i]['frame_ids'], other_feature_matrix[-1], '.-', label=f'{label_b} {i}',
+                    linewidth=0.5, markersize=2, color=compare_colors[i])
+                    ax2.plot(compare_dict[i]['frame_ids'], other_distance_matrix[-1], '.-', label=f'{label_b} {i}',
+                    linewidth=0.5, markersize=2, color=compare_colors[i])
+
+                ax1.plot(focus_dict[fi]['frame_ids'], focus_feature_matrix[-1], '^-', label=f'{label_a} {fi}',
+                linewidth=1, markersize=4, color=focus_colors[-1])
+                ax3.plot(focus_dict[fi]['frame_ids'], focus_feature_matrix[-1], '^-', label=f'{label_a} {fi}',
+                linewidth=1, markersize=4, color=focus_colors[-1])
+                ax2.plot(focus_dict[fi]['frame_ids'], focus_distance_matrix[-1], '^-', label=f'{label_a} {fi}',
+                linewidth=1, markersize=4, color=focus_colors[-1])
+                ax4.plot(focus_dict[fi]['frame_ids'], focus_distance_matrix[-1], '^-', label=f'{label_a} {fi}',
+                linewidth=1, markersize=4, color=focus_colors[-1])
+
+                ax1.axis('auto')
+                ax2.axis('auto')
+                ax3.axis('auto')
+                ax4.axis('auto')
+
+                ax1.set_title(f'Feature Distance: {label_a} -> {label_b}s')
+                ax2.set_title(f'Position Distance: {label_a} -> {label_b}s')
+                ax3.set_title(f'Feature Distance: {label_a} -> {label_a}s')
+                ax4.set_title(f'Postion Distance: {label_a} -> {label_a}s')
+
+                plt.legend(loc=(1.02, 0.0), ncol=ncol, fontsize=8)
+                save_path = os.path.join(path, f'multi_graph/{video_name}_for_{label_a}({fi})')
+                plt.savefig(save_path)
+                plt.clf()
+
+        draw_cost_graph(gt_dict, pd_dict, 'for_gt')
+        draw_cost_graph(pd_dict, gt_dict, 'for_pd')            
 
 
 plt.rcParams['figure.autolayout'] = True
-plt.rcParams['figure.figsize'] = [17, 7]
+plt.rcParams['figure.figsize'] = [17, 7] # [17, 15]
