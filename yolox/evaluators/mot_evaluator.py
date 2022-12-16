@@ -389,12 +389,11 @@ class MOTEvaluator:
         last_frame_id = 0
         first_frame_id = 0
         track_list=defaultdict(list) # for animation
-        # if self.args.mot20:
-        #     gtfiles = glob(os.path.join(f'datasets/MOT20/train', '*/gt/gt_val_half.txt'))
-        # else:
-        #     gtfiles = glob(os.path.join(f'datasets/mot/train', '*/gt/gt_val_half.txt'))
-        # gt = OrderedDict([(Path(f).parts[-3], mm.io.loadtxt(f, fmt='mot15-2D', min_confidence=1)) for f in gtfiles])
-
+        if self.args.mot20:
+            gtfiles = glob(os.path.join(f'datasets/MOT20/train', '*/gt/gt_val_half.txt'))
+        else:
+            gtfiles = glob(os.path.join(f'datasets/mot/train', '*/gt/gt_val_half.txt'))
+        gt = OrderedDict([(Path(f).parts[-3], mm.io.loadtxt(f, fmt='mot15-2D', min_confidence=1)) for f in gtfiles])
         for cur_iter, (imgs, _, info_imgs, ids) in enumerate(
             progress_bar(self.dataloader)
         ):
@@ -443,7 +442,7 @@ class MOTEvaluator:
                     video_names[video_id] = video_name
                 if frame_id == 1:
                     tracker = MEMTracker(self.args)
-                    first_frame_id = int(img_file_name[0].split('/')[-1])
+                    first_frame_id = int(img_file_name[0].split('/')[-1].split('.')[0])
                     if len(results) != 0:
                         result_filename = os.path.join(result_folder, f'{video_names[video_id - 1]}.txt')
                         write_results(result_filename, results)
@@ -482,18 +481,11 @@ class MOTEvaluator:
                         online_tlwhs.append(tlwh)
                         online_ids.append(tid)
                         online_scores.append(t.score)
-                    # if (cur_iter % 100 == 0) and (cur_iter != 0):
-                    #     distance_save_path=os.path.join(result_folder,
-                    #                                     f'distance_img/{video_names[video_id]}_{cur_iter}_{tid}_({t.start_frame}'
-                    #                                     f'-{t.end_frame})')
-                    #     self.track_feature_plot(t, distance_save_path)
                     # track_list[t.track_id].append(t)
                 # if frame_id == last_frame_id:
-                #     self.memory_feature_plot_2(online_targets, result_folder, video_names[video_id], last_frame_id)
-                    # track_feature_plot(track_list, video_names[video_id])
-                    # self.memory_feature_plot_for_label(online_targets, gt[video_name], result_folder,
-                    #                                    video_names[video_id], last_frame_id)
-                    # track_list=defaultdict(list)
+                #     self.memory_feature_plot_for_label(online_targets, gt[video_name], self.args.model_folder, result_folder,
+                #                                        video_names[video_id], last_frame_id, first_frame_id)
+                #     # track_list=defaultdict(list)
 
                 # save results
                 results.append((frame_id, online_tlwhs, online_ids, online_scores))
@@ -960,6 +952,7 @@ class MOTEvaluator:
 
     @staticmethod
     def memory_feature_plot_for_label(tracks, gt, model_folder, path, video_name, last_frame_id, start_frame_id):
+        print(f'graph drawing...')
         gt_dict = defaultdict(lambda : defaultdict(list))
         pd_dict = defaultdict(lambda : defaultdict(list))
 
@@ -975,7 +968,7 @@ class MOTEvaluator:
 
         gt = gt.reset_index(['Id', 'FrameId']).sort_values(by=['FrameId'])
         Frames = sorted(list(gt.index.unique()))
-
+        print('???????????')
         import cv2
         from yolox.data.dataloading import get_yolox_datadir
         from yolox.mem_tracker.reid_model import load_reid_model, extract_reid_features
@@ -1000,11 +993,7 @@ class MOTEvaluator:
             pd_dict[tid]['frame_ids'] = track.memory['frame_id']
             pd_dict[tid]['tlbrs'] = list(track.memory['tlbrs'])
             pd_dict[tid]['features'] = list(track.memory['features'])
-
-        if len(pd_dict) + len(gt_dict) >= 50:
-            ncol = (len(pd_dict) + len(gt_dict)) // 50
-        else:
-            ncol = 1
+        print('gt & pd ready')
 
         axis_label = list(range(1, last_frame_id+1, (last_frame_id-1)//10))
 
@@ -1018,8 +1007,19 @@ class MOTEvaluator:
 
             focus_ids = list(focus_dict.keys())
             compare_ids = list(compare_dict.keys())
-            focus_colors = plt.cm.jet(np.linspace(0, 1, len(focus_dict)))
+            focus_colors = plt.cm.jet(np.linspace(0, 1, len(focus_dict) +1))
             compare_colors = plt.cm.jet(np.linspace(0, 1, len(compare_dict) + 1))
+
+            if len(focus_dict) >= 25:
+                f_ncol = len(focus_dict) // 25
+            else:
+                f_ncol = 1
+
+            if len(compare_dict) >= 25:
+                c_ncol = len(compare_dict) // 25
+            else:
+                c_ncol = 1
+
             for fi in focus_ids:
                 axes = plt.axes()
                 axes.set_ylim(bottom=0)
@@ -1034,21 +1034,25 @@ class MOTEvaluator:
                 focus_feature_matrix, focus_distance_matrix = \
                 get_cost_matrix_for_target(focus_target, focus_position, focus_dict[fi])
 
-                for i in focus_ids.remove(fi):
+                self_focus_ids = focus_ids.copy()
+                self_focus_ids.remove(fi)
+                for _i in range(len(self_focus_ids)):
+                    sfi = self_focus_ids[_i]
                     other_feature_matrix, other_distance_matrix = \
-                    get_cost_matrix_for_target(focus_target, focus_position, focus_dict[i])
-                    ax3.plot(focus_dict[i]['frame_ids'], other_feature_matrix[-1], ',-', label=f'{label_a} {i}',
-                    linewidth=0.5, markersize=2, color=focus_colors[i])
-                    ax4.plot(focus_dict[i]['frame_ids'], other_distance_matrix[-1], ',-', label=f'{label_a} {i}',
-                    linewidth=0.5, markersize=2, color=focus_colors[i])
+                    get_cost_matrix_for_target(focus_target, focus_position, focus_dict[sfi])
+                    ax3.plot(focus_dict[sfi]['frame_ids'], other_feature_matrix[-1], ',-', label=f'{label_a} {sfi}',
+                    linewidth=0.5, markersize=2, color=focus_colors[_i])
+                    ax4.plot(focus_dict[sfi]['frame_ids'], other_distance_matrix[-1], ',-', label=f'{label_a} {sfi}',
+                    linewidth=0.5, markersize=2, color=focus_colors[_i])
 
-                for i in compare_ids:
+                for _i in range(len(compare_ids)):
+                    ci = compare_ids[_i]
                     other_feature_matrix, other_distance_matrix = \
-                        get_cost_matrix_for_target(focus_target, focus_position, compare_dict[i])
-                    ax1.plot(compare_dict[i]['frame_ids'], other_feature_matrix[-1], '.-', label=f'{label_b} {i}',
-                    linewidth=0.5, markersize=2, color=compare_colors[i])
-                    ax2.plot(compare_dict[i]['frame_ids'], other_distance_matrix[-1], '.-', label=f'{label_b} {i}',
-                    linewidth=0.5, markersize=2, color=compare_colors[i])
+                        get_cost_matrix_for_target(focus_target, focus_position, compare_dict[ci])
+                    ax1.plot(compare_dict[ci]['frame_ids'], other_feature_matrix[-1], '.-', label=f'{label_b} {ci}',
+                    linewidth=0.5, markersize=2, color=compare_colors[_i])
+                    ax2.plot(compare_dict[ci]['frame_ids'], other_distance_matrix[-1], '.-', label=f'{label_b} {ci}',
+                    linewidth=0.5, markersize=2, color=compare_colors[_i])
 
                 ax1.plot(focus_dict[fi]['frame_ids'], focus_feature_matrix[-1], '^-', label=f'{label_a} {fi}',
                 linewidth=1, markersize=4, color=focus_colors[-1])
@@ -1069,14 +1073,17 @@ class MOTEvaluator:
                 ax3.set_title(f'Feature Distance: {label_a} -> {label_a}s')
                 ax4.set_title(f'Postion Distance: {label_a} -> {label_a}s')
 
-                plt.legend(loc=(1.02, 0.0), ncol=ncol, fontsize=8)
+                ax2.legend(loc=(1.02, 0.0), ncol=c_ncol, fontsize=8)
+                ax4.legend(loc=(1.02, 0.0), ncol=f_ncol, fontsize=8)
                 save_path = os.path.join(path, f'multi_graph/{video_name}_for_{label_a}({fi})')
                 plt.savefig(save_path)
                 plt.clf()
 
-        draw_cost_graph(gt_dict, pd_dict, 'for_gt')
-        draw_cost_graph(pd_dict, gt_dict, 'for_pd')            
+        # draw_cost_graph(gt_dict, pd_dict, 'for_gt')
+        print('gt complete')
+        # draw_cost_graph(pd_dict, gt_dict, 'for_pd')
+        print('pd complete')
 
 
 plt.rcParams['figure.autolayout'] = True
-plt.rcParams['figure.figsize'] = [17, 7] # [17, 15]
+plt.rcParams['figure.figsize'] = [18, 17] # [17, 15]
