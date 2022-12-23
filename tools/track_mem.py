@@ -18,6 +18,7 @@ import motmetrics as mm
 from collections import OrderedDict
 from pathlib import Path
 import pandas as pd
+import wandb
 pd.set_option('display.max_rows', None)
 
 def make_parser():
@@ -98,6 +99,12 @@ def make_parser():
         default=None,
         nargs=argparse.REMAINDER,
     )
+    parser.add_argument(
+        "--wandb",
+        default = True,
+        action = "store_true",
+        help = "wandb sweep"
+    )
     # det args
     parser.add_argument("-c", "--ckpt", default='pretrained/bytetrack_ablation.pth.tar', type=str, help="ckpt for eval")
     parser.add_argument("--conf", default=0.01, type=float, help="test conf")
@@ -148,10 +155,11 @@ def main(exp, args, num_gpu):
     if rank == 0:
         os.makedirs(file_name, exist_ok=True)
 
+
     results_folder = os.path.join(file_name, "track_results_memtracker")
     os.makedirs(results_folder, exist_ok=True)
 
-    setup_logger(file_name, distributed_rank=rank, filename='val_log_mem.txt', mode="a")
+    setup_logger(file_name, distributed_rank=rank, filename='val_log.txt', mode="a")
     logger.info(f"Args: {args}")
 
     if args.conf is not None:
@@ -210,6 +218,10 @@ def main(exp, args, num_gpu):
     else:
         trt_file = None
         decoder = None
+
+    # if rank == 0 and args.wandb:
+    #     wandb.init(config=args)
+    #     wandb.watch(model)
     
     # start evaluate
     *_, summary = evaluator.evaluate_memtracker(
@@ -245,7 +257,8 @@ def main(exp, args, num_gpu):
                'partially_tracked', 'mostly_lost', 'num_false_positives', 'num_misses',
                'num_switches', 'num_fragmentations', 'mota', 'motp', 'num_objects']
     summary = mh.compute_many(accs, names=names, metrics=metrics, generate_overall=True)
-
+    # if rank == 0 and args.wandb:
+    #   wandb.log({'ovelall_mota':summary.loc['OVERALL', 'mota'].value, ...})
     div_dict = {
         'num_objects': ['num_false_positives', 'num_misses', 'num_switches', 'num_fragmentations'],
         'num_unique_objects': ['mostly_tracked', 'partially_tracked', 'mostly_lost']}
@@ -274,7 +287,8 @@ if __name__ == "__main__":
 
     num_gpu = torch.cuda.device_count() if args.devices is None else args.devices
     assert num_gpu <= torch.cuda.device_count()
-
+    # sweep_id  = wandb.sweep(wandb_config.sweep_config, project="memmot", entity='ciot')
+    # wandb.agent(sweep_id, launch)
     launch(
         main,
         num_gpu,

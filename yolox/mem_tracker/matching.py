@@ -56,6 +56,22 @@ def iou_distance(atracks, btracks):
     cost_matrix = 1 - _ious
     return cost_matrix
 
+def memory_distance(tracks, detections): # tracks: M (memory len - l [!3, 4, 3, 2, 4]), detections: N
+    distance_cost_matrix = np.zeros((len(tracks), len(detections)), dtype=np.float)
+    feature_cost_matrix = np.zeros((len(tracks), len(detections)), dtype=np.float)
+    if distance_cost_matrix.size == 0:
+        return distance_cost_matrix # M x N
+
+    detection_features = [det.curr_feature for det in detections] # N
+    detection_tlbrs = [det.tlbr for det in detections] # N
+
+    for curr_track in tracks: # iter M
+        curr_track_features = curr_track.memory['features'] # l
+        curr_track_tlbrs = curr_track.memory['tlbrs'] # l
+        # N x l
+        # /l -> N
+        # [M, N]
+
 def fuse_score(cost_matrix, detections):
     if cost_matrix.size == 0:
         return cost_matrix
@@ -82,18 +98,7 @@ def embedding_distance(tracks, detections, metric='cosine'):
     cost_matrix = np.maximum(0.0, cdist(track_features, det_features, metric))
     return cost_matrix
 
-def memory_distance(tracks, detections, metric='cosine'):
-    cost_matrix = np.zeros((len(tracks), len(detections)), dtype=np.float)
-    if cost_matrix.size == 0:
-        return cost_matrix
-    det_features = np.asarray([track.curr_feature for track in detections], dtype = np.float)
-    memories = [track.features for track in tracks]
-    costs = []
-    for mem in memories:
-        # TODO
-        costs.append(np.maximum(0.0, cdist(det_features, mem, metric)))
 
-    return cost_matrix
 
 def features_distance(target, features, metric='cosine'):
     cost_matrix = np.zeros((len(target), len(features)), dtype = np.float)
