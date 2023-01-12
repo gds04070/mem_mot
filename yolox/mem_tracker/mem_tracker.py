@@ -113,7 +113,7 @@ class STrack(BaseTrack):
 
         self.score = new_track.score
         if update_feature:
-            self.update_features(new_track.curr_feature, self.frame_id) # TODO roi 도 같이 업데이트할지
+            self.update_features(new_track.curr_feature, self.frame_id) 
 
     @property
     # @jit(nopython=True)
@@ -255,6 +255,13 @@ class MEMTracker(object):
 
         # Step 2: First association, with high score detection boxes
         # TODO iou distance or ! reid distance ! / memory distance(?): feature read 비교 계산(read) - !!!!!!
+        # dists = matching.calculate_fuse_distance(strack_pool,
+        #                                          detections,
+        #                                          fuse = not self.args.mot20,
+        #                                          term_type = 'half',
+        #                                          iou_weight = 0.7,
+        #                                          reid_weight = 0.3,
+        #                                          distance_weight = 0.7)
         dists = matching.iou_distance(strack_pool, detections)
         if not self.args.mot20:
             dists = matching.fuse_score(dists, detections)
@@ -274,6 +281,14 @@ class MEMTracker(object):
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
         # iou distance
         dists = matching.iou_distance(r_tracked_stracks, detections_second)
+        # dists=matching.calculate_fuse_distance(r_tracked_stracks,
+        #                                        detections_second,
+        #                                        fuse = not self.args.mot20,
+        #                                        term_type = 'all',
+        #                                        iou_weight = 0.7,
+        #                                        reid_weight = 0.3,
+        #                                        distance_weight = 0.7)
+
         matches, u_track, u_detection_second = matching.linear_assignment(dists, thresh=0.5)
         for itracked, idet in matches:
             track = r_tracked_stracks[itracked]
@@ -284,25 +299,32 @@ class MEMTracker(object):
             else:
                 track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
+
         for it in u_track:
             track = r_tracked_stracks[it]
             if not track.state == TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
 
+        # 없어진 것 중 완전 Feature로만 매칭 / lost, remove
         # Deal with unconfirmed tracks, usually tracks with only one beginning frame
         detections = [detections[i] for i in u_detection]
-        dists = matching.iou_distance(unconfirmed, detections)
-        if not self.args.mot20:
-            dists = matching.fuse_score(dists, detections)
+        # dists = matching.iou_distance(unconfirmed, detections)
+        # if not self.args.mot20:
+        #     dists = matching.fuse_score(dists, detections)
+        dists = matching.calculate_fuse_distance(unconfirmed, detections, fuse = not self.args.mot20,
+                                                term_type = 'all', iou_weight = 0.5, reid_weight=1.0,
+                                                distance_weight = 0.0)
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
         for itracked, idet in matches:
             unconfirmed[itracked].update(detections[idet], self.frame_id)
             activated_stracks.append(unconfirmed[itracked])
+        # !! 
         for it in u_unconfirmed:
             track = unconfirmed[it]
             track.mark_removed()
             removed_stracks.append(track)
+        # !!
         # Step 4: Init new stracks
         for inew in u_detection:
             track = detections[inew]
@@ -310,6 +332,7 @@ class MEMTracker(object):
                 continue
             track.activate(self.kalman_filter, self.frame_id)
             activated_stracks.append(track)
+        # !!
         # Step 5: Update state
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:

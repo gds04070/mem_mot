@@ -56,21 +56,70 @@ def iou_distance(atracks, btracks):
     cost_matrix = 1 - _ious
     return cost_matrix
 
-def memory_distance(tracks, detections): # tracks: M (memory len - l [!3, 4, 3, 2, 4]), detections: N
+def calculate_fuse_distance(tracks, detections, fuse, term_type, iou_weight = 1, reid_weight=0.5, distance_weight=0.5):
+    iou_cost_matrix = iou_distance(tracks, detections) * iou_weight
+    if fuse:
+        iou_cost_matrix = fuse_score(iou_cost_matrix, detections)
+    feature_cost_matrix, distance_cost_matrix = memory_distance(tracks, detections, term_type)
+    # distance_cost_matrix= 1 - 1 / (1+ distance_cost_matrix**0.25)
+    distance_cost_matrix = 1 - 1/(1.1**distance_cost_matrix) # best
+    feature_cost_matrix *= reid_weight
+    distance_cost_matrix *= distance_weight
+    cost_matrix = iou_cost_matrix + (feature_cost_matrix + distance_cost_matrix) * (1 - iou_weight)
+    return cost_matrix
+
+def memory_distance(tracks, detections, term_type): # tracks: M (memory len - l), detections: N
+    def calculate_weight(l, method):
+        if method == 'constant':
+            w = np.ones(l)
+        elif method == 'linear': # linear
+            if l == 1:
+                return [1.]
+            w = np.linspace(0, 1, l)
+        else: # exp
+            w = np.exp(np.linspace(0, 1, l))
+            w = w / np.max(w)
+        return w
+
+    if term_type == 'half':
+        term = 2
+    else:
+        term = 1
+
     distance_cost_matrix = np.zeros((len(tracks), len(detections)), dtype=np.float)
     feature_cost_matrix = np.zeros((len(tracks), len(detections)), dtype=np.float)
     if distance_cost_matrix.size == 0:
-        return distance_cost_matrix # M x N
-
-    detection_features = [det.curr_feature for det in detections] # N
-    detection_tlbrs = [det.tlbr for det in detections] # N
-
-    for curr_track in tracks: # iter M
-        curr_track_features = curr_track.memory['features'] # l
-        curr_track_tlbrs = curr_track.memory['tlbrs'] # l
+        return feature_cost_matrix, distance_cost_matrix # M x N
+    detection_features = np.array([det.curr_feature for det in detections]) # N
+    detection_tlbrs = np.array([det.tlbr for det in detections]) # N
+    for ti, curr_track in enumerate(tracks): # iter M
+        memory_length=len(curr_track.memory['features'])//term
+        curr_track_features = np.array(curr_track.memory['features'])[memory_length-1:] # l
+        curr_track_tlbrs = np.array(curr_track.memory['tlbrs'])[memory_length-1:] # l
         # N x l
+        feature_cost = features_distance(detection_features, curr_track_features) # N x l
+        tlbr_cost = features_distance(detection_tlbrs, curr_track_tlbrs, 'euclidean') # N x l
         # /l -> N
+        # feature_cost = np.mean(feature_cost, axis=1) # N | np.max(feature_cost, axis=1) | np.average()
+        feature_cost = np.average(feature_cost, axis=1, weights=calculate_weight(len(curr_track_features), 'linear'))
+        tlbr_cost = np.average(tlbr_cost, axis=1, weights=calculate_weight(len(curr_track_tlbrs), 'linear'))
         # [M, N]
+        feature_cost_matrix[ti] = feature_cost
+        distance_cost_matrix[ti] = tlbr_cost
+    return feature_cost_matrix, distance_cost_matrix
+
+def features_distance(target, features, metric='cosine'):
+    cost_matrix = np.zeros((len(target), len(features)), dtype = np.float)
+    if cost_matrix.size == 0:
+        return cost_matrix
+    if not isinstance(target, np.ndarray):
+        target = np.asarray(target)
+    if not isinstance(features, np.ndarray):
+        features = np.asarray(features)
+    if len(target.shape) == 1:
+        target = target.reshape(1, -1)
+    cost_matrix = np.maximum(0.0, cdist(target, features, metric))
+    return cost_matrix
 
 def fuse_score(cost_matrix, detections):
     if cost_matrix.size == 0:
@@ -96,19 +145,4 @@ def embedding_distance(tracks, detections, metric='cosine'):
     det_features = np.asarray([track.curr_feature for track in detections], dtype=np.float)
     track_features = np.asarray([track.smooth_feat for track in tracks], dtype=np.float) # !!!!
     cost_matrix = np.maximum(0.0, cdist(track_features, det_features, metric))
-    return cost_matrix
-
-
-
-def features_distance(target, features, metric='cosine'):
-    cost_matrix = np.zeros((len(target), len(features)), dtype = np.float)
-    if cost_matrix.size == 0:
-        return cost_matrix
-    if not isinstance(target, np.ndarray):
-        target = np.asarray(target)
-    if not isinstance(features, np.ndarray):
-        features = np.asarray(features)
-    if len(target.shape) == 1:
-        target = target.reshape(1, -1)
-    cost_matrix = np.maximum(0.0, cdist(target, features, metric))
     return cost_matrix
